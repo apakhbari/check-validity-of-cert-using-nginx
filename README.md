@@ -9,53 +9,99 @@
 |_______||_______||___|  |_|  |___|        |___|  |__| |__||_______||___| |______| |___|   |___|    |___|  
 ```
 
-A simple Dockerized Nginx setup to verify SSL/TLS certificate validity (including OCSP stapling) over HTTP/2. Perfect for testing your certificate chains, private keys, and server configuration.
+Here’s your improved **`README.md`** with a clean and clickable **Table of Contents** — ideal for GitHub, GitLab, or documentation use.
+It’s structured, production-ready, and still general enough to reuse as a template for any Nginx-based project.
 
----
 
-## Table of Contents
 
-- [Prerequisites](#prerequisites)  
-- [Directory Structure](#directory-structure)  
-- [Configuration](#configuration)  
-  - [docker-compose.yml](#docker-composeyml)  
-  - [nginx.conf](#nginxconf)  
-- [Setup & Usage](#setup--usage)  
-- [Testing Certificate Validity](#testing-certificate-validity)  
-- [Enabling OCSP Stapling](#enabling-ocsp-stapling)  
-- [Troubleshooting](#troubleshooting)  
-- [License](#license)  
+# 🧩 NGINX Docker Template
 
----
+This repository provides a **ready-to-use Nginx Docker setup** designed for flexibility and production-like behavior.  
+It includes support for:
+- **SSL/TLS (HTTPS)** with mounted certificates  
+- **Non-SNI fallback** (for embedded or legacy clients)  
+- **Access and error logs** stored on the host  
+- **Modular configuration** (`nginx.conf` + site configs in `conf.d/`)  
+- **Reusability as a template** for future Nginx deployments
 
-## Prerequisites
 
-- Docker Engine (v20+)  
-- Docker Compose (v1.27+)  
-- A valid SSL/TLS certificate bundle (`full_chain2.pem`)  
-- Corresponding private key (`<your>.key`)  
-- Optional: OCSP responder reachable from your host  
 
----
+## 📑 Table of Contents
 
-## Directory Structure
+1. [Directory Structure](#-directory-structure)
+2. [Quick Start](#-quick-start)
+3. [Configuration Details](#-configuration-details)
+   - [docker-compose.yml](#-docker-composeyml)
+   - [nginx.conf](#-nginxconf)
+   - [Example Site Config (`tms.conf`)](#-example-confdtmsconf)
+4. [Verifying SSL and SNI Behavior](#-verifying-ssl-and-sni-behavior)
+5. [Maintenance Commands](#-maintenance-commands)
+6. [Use as Template](#-use-as-template)
+7. [License](#-license)
 
-```bash
-check-validity-of-cert/
-├── certs/
-│   └── full_chain2.pem        # Your certificate chain (end-entity + intermediates)
-├── private/
-│   └── <your>.key             # Your private key
-├── nginx.conf                 # Nginx server configuration
-├── docker-compose.yml         # Docker Compose service definition
-└── README.md                  # This file
+
+
+## 📁 Directory Structure
+
+```
+
+nginx-ssl/
+├── docker-compose.yml        # Compose file to run Nginx container
+├── nginx.conf                 # Main global Nginx configuration
+├── conf.d/                    # Folder for per-site configs
+│   └── tms.conf               # Example reverse proxy config
+├── certs/                     # Public certificates (fullchain.pem)
+├── private/                   # Private key (privkey.pem)
+└── logs/                      # Mounted logs (access/error)
+
 ````
 
----
+You can duplicate this repository and only modify:
+- `conf.d/*.conf` → For each domain or reverse proxy target  
+- `certs/` & `private/` → With your own SSL certs  
+- `ports` → In `docker-compose.yml` if needed (e.g. `808:80`, `4043:443`)
 
-## Configuration
 
-### `docker-compose.yml`
+
+## 🚀 Quick Start
+
+1. **Clone this repository**
+
+```bash
+   git clone https://github.com/<yourusername>/nginx-template.git
+   cd nginx-template
+````
+
+2. **Add your SSL certificates**
+
+   ```
+   certs/fullchain.pem
+   private/privkey.pem
+   ```
+
+3. **Adjust site config**
+
+   Edit `conf.d/example.conf` or create a new one for your domain.
+
+4. **Run Nginx**
+
+   ```bash
+   docker compose up -d
+   ```
+
+5. **Check logs**
+
+   ```bash
+   docker compose logs -f nginx
+   # or directly:
+   tail -f logs/*.log
+   ```
+
+
+
+## ⚙️ Configuration Details
+
+### 🔸 docker-compose.yml
 
 ```yaml
 version: '3.7'
@@ -64,156 +110,161 @@ services:
   nginx:
     image: nginx:latest
     container_name: nginx-ssl
+    restart: unless-stopped
     ports:
+      - "80:80"
       - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./certs:/etc/ssl/certs
-      - ./private:/etc/ssl/private
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./conf.d:/etc/nginx/conf.d:ro
+      - ./certs:/etc/ssl/certs:ro
+      - ./private:/etc/ssl/private:ro
+      - ./logs:/var/log/nginx
     networks:
       - ssl_network
-    restart: unless-stopped
 
 networks:
   ssl_network:
     driver: bridge
 ```
 
-### `nginx.conf`
+* Uses the official **nginx:latest** image
+* Exposes HTTP/HTTPS ports
+* Mounts configs, certs, and logs
+* Restarts automatically unless stopped manually
+
+
+
+### 🔸 nginx.conf
 
 ```nginx
+user  nginx;
+worker_processes  auto;
+
+error_log  /var/log/nginx/error.log warn;
+pid        /var/run/nginx.pid;
+
 events {
-    worker_connections 1024;
+    worker_connections  1024;
 }
 
 http {
-    server {
-        listen 443 ssl http2;
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
 
-        # SSL/TLS protocols and ciphers
-        ssl_protocols       TLSv1.3;
-        ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES128-GCM-SHA256;
-        ssl_prefer_server_ciphers off;
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
 
-        # Certificate files (mount point inside container)
-        ssl_certificate     /etc/ssl/certs/full_chain2.pem;
-        ssl_certificate_key /etc/ssl/private/<your>.key;
+    access_log /var/log/nginx/access.log main;
 
-        # OCSP Stapling (optional but recommended)
-        ssl_stapling        on;
-        ssl_stapling_verify on;
-        resolver            1.1.1.1 valid=300s;   # Cloudflare DNS
-        resolver_timeout    5s;
+    sendfile        on;
+    keepalive_timeout  65;
+    include /etc/nginx/conf.d/*.conf;
+}
+```
 
-        # Your hostname
-        server_name         <your.domain>;
+This is the **global configuration**.
+You can add more directives or performance tweaks here, but site configs stay under `conf.d/`.
 
-        # Simple test page
-        location / {
-            root   /usr/share/nginx/html;
-            index  index.html;
-        }
+
+
+### 🔸 Example `conf.d/tms.conf`
+
+This example supports **both SNI and non-SNI** clients and proxies traffic to an internal HTTPS backend.
+
+```nginx
+map $scheme $hsts_header {
+    https   "max-age=63072000; preload";
+}
+
+# Default (non-SNI) SSL server
+server {
+    listen 443 default_server ssl;
+    listen [::]:443 default_server ssl;
+
+    ssl_certificate     /etc/ssl/certs/fullchain.pem;
+    ssl_certificate_key /etc/ssl/private/privkey.pem;
+
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    return 301 https://tms.stage.eniac-tech.com$request_uri;
+}
+
+# Main HTTPS Virtual Host
+server {
+    listen 80;
+    listen [::]:80;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name tms.stage.eniac-tech.com;
+    http2 off;
+
+    ssl_certificate     /etc/ssl/certs/fullchain.pem;
+    ssl_certificate_key /etc/ssl/private/privkey.pem;
+
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    access_log /var/log/nginx/tms_access.log;
+    error_log  /var/log/nginx/tms_error.log;
+
+    location / {
+        proxy_pass https://192.168.33.141:443;
+        proxy_ssl_server_name off;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
 
-> **⚠️ Remember:**
->
-> * Replace `<your>.key` with the filename of your private key.
-> * Replace `<your.domain>` (and in the cert files, if needed) with your actual server name.
 
----
 
-## Setup & Usage
+## 🔍 Verifying SSL and SNI Behavior
 
-1. **Clone or download** this repository:
-
-   ```bash
-   git clone https://github.com/your-org/check-validity-of-cert.git
-   cd check-validity-of-cert
-   ```
-
-2. **Place your certificate bundle** in `./certs/full_chain2.pem`.
-
-3. **Place your private key** in `./private/<your>.key`.
-
-4. **Edit** `nginx.conf`:
-
-   * Update `ssl_certificate_key` to match your key filename.
-   * Set `server_name` to your domain or IP.
-
-5. **Start the service**:
-
-   ```bash
-   docker-compose up -d
-   ```
-
-6. **Verify** that the container is running:
-
-   ```bash
-   docker-compose ps
-   ```
-
----
-
-## Testing Certificate Validity
-
-### Using `openssl`:
+### ✅ Test with SNI
 
 ```bash
-openssl s_client -connect localhost:443 -status \
-  -servername <your.domain>
+openssl s_client -connect tms.stage.eniac-tech.com:443 -servername tms.stage.eniac-tech.com
 ```
 
-* Look for `OCSP response:` and certificate chain details.
-* Ensure there are **no errors** in the handshake.
-
-### Using `curl` (with HTTP/2):
+### ✅ Test without SNI
 
 ```bash
-curl -I --http2 https://localhost --resolve localhost:443:127.0.0.1
+openssl s_client -connect tms.stage.eniac-tech.com:443
 ```
 
-* Check for `HTTP/2 200` response.
-* Verify the certificate details in the output.
+If both return a valid certificate, your **non-SNI fallback** is active and functional.
 
----
 
-## Enabling OCSP Stapling
 
-OCSP stapling allows Nginx to fetch and cache the OCSP response from the CA, improving TLS handshake performance and reliability.
+## 🧹 Maintenance Commands
 
-1. Ensure `ssl_stapling on; ssl_stapling_verify on;` are set in `nginx.conf`.
-2. Configure a DNS resolver for OCSP:
-
-   ```nginx
-   resolver 1.1.1.1 valid=300s;
-   resolver_timeout 5s;
-   ```
-3. Reload Nginx:
-
-   ```bash
-   docker-compose exec nginx nginx -s reload
-   ```
-
-Test stapling specifically:
+Reload configuration:
 
 ```bash
-openssl s_client -connect localhost:443 -status
+docker exec -it nginx-ssl nginx -t
+docker exec -it nginx-ssl nginx -s reload
 ```
 
-* You should see a non-`no response sent` OCSP response block.
+Stop and remove:
 
----
+```bash
+docker compose down
+```
 
-## Troubleshooting
+Rebuild:
 
-* **Port conflicts**: Make sure nothing else is binding to host port 443.
-* **Invalid cert/key paths**: Check volume mounts and file permissions.
-* **OCSP timeouts**: Adjust `resolver_timeout` or verify network access.
-* **Cipher issues**: Modify `ssl_ciphers` if your platform requires different suites.
+```bash
+docker compose up -d --force-recreate
+```
 
----
+
 # acknowledgment
 ## Contributors
 
